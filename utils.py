@@ -7,7 +7,6 @@ def splitting_data(df):
     test_data_list = []
 
     df_model = df.sort_values(by='Team')  
-    df_model = df_model.drop(columns = 'Game Date')
     for team, group in df_model.groupby('Team'):
         train_size = int(len(group) * 0.7)
         train_data_list.append(group.iloc[:train_size])
