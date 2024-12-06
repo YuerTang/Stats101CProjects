@@ -1,0 +1,379 @@
+---
+title: "Final Project Dataset Stuff"
+output: html_document
+date: "2024-11-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(MASS)
+library(class)
+library(tidyverse)
+library(dplyr)
+library(readxl)
+library(rpart)
+library(rpart.plot) # for decision tree/plotting
+library(randomForest) # for random forest
+library(adabag) # for boosting
+library(e1071)
+library(glmnet)
+```
+
+```{r}
+data <- as.data.frame(read_xlsx("Dataset.xlsx"))
+data
+```
+```{r}
+data$`Game Date` = as.Date(data$`Game Date`, format="%m/%d/%Y")
+```
+
+
+```{r}
+data$HomeAdv = as.numeric(word(data$`Match Up`, 2) == "vs.")
+data$Opp = word(data$`Match Up`, 3)
+data$class = as.numeric(data$`W/L` == "W")
+data = data[, c(3,1,26,27,25,5:24)]
+data
+```
+
+```{r}
+calculate_weight <- function(days_since_match, alpha=0.05){
+    #Calculate weight based on days since match
+    exp(-alpha * days_since_match)
+}
+
+new_data <- data
+new_data$WLdif = numeric(nrow(data))
+new_data$PWR = numeric(nrow(data))
+new_data$stability = numeric(nrow(data))
+for (i in 1:nrow(data))
+{
+  date <- data$`Game Date`[i]
+  main <- data$Team[i]
+  op <- data$Opp[i]
+  
+  temp_main <- data[(data$`Game Date` < date) & (data$Team == main),]
+  temp_op <- data[(data$`Game Date` < date) & (data$Team == op),]
+  temp_both <- data[(data$`Game Date` < date) & (data$Team == main) & (data$Opp == op), ]
+  
+  if (nrow(temp_main) == 0 || nrow(temp_op) == 0)
+  {
+    new_data[i,5:25] = NA
+  }
+  else
+  {
+    for (j in 1:nrow(temp_main))
+    {
+      temp_main$Weight[j] = calculate_weight(as.numeric(date - temp_main$`Game Date`[j]))
+      temp_main$vars[j] = var(as.numeric(temp_main[j,6:25]))
+      if (temp_main$HomeAdv[j] == 0)
+      {
+        temp_main$class[j] = temp_main$class[j]*1.5
+      }
+      ## gives a boost to winning as guest
+    }
+    for (j in 1:nrow(temp_op))
+    {
+      temp_op$Weight[j] = calculate_weight(as.numeric(date - temp_op$`Game Date`[j]))
+      temp_op$vars[j] = var(as.numeric(temp_op[j,6:25]))
+      if (temp_op$HomeAdv[j] == 0)
+      {
+        temp_op$class[j] = temp_op$class[j]*1.5
+      }
+      
+    }
+    
+    
+    new_data$stability[i] = 0
+    
+    for (j in 6:25)
+    {
+      new_data[i,j] = (sum(temp_main[,j] * temp_main$Weight) / sum(temp_main$Weight)) - 
+        (sum(temp_op[,j] * temp_op$Weight) / sum(temp_op$Weight))
+      
+      new_data$stability[i] = (mean(temp_main[,j]) / var(temp_main[,j])) - (mean(temp_op[,j]) / var(temp_op[,j]))
+    }
+    
+    new_data$WLdif[i] = (sum(temp_main$Weight * temp_main$class) / sum(temp_op$Weight)) - 
+      (sum(temp_op$Weight * temp_op$class) / sum(temp_op$Weight))
+    
+  }
+  
+  if (nrow(temp_both) == 0)
+  {
+    new_data[i,27] = 0
+  }
+  else
+  {
+    new_data[i,27] = mean(temp_both$class)
+  }
+  
+}
+new_data = new_data[,c(4,26,27,5:25,28)]
+
+```
+
+```{r}
+new_data = new_data[complete.cases(new_data), ]
+new_data
+```
+
+
+
+
+```{r}
+colnames(new_data)
+colnames(new_data)[c(9,10,11,12,15,24)] = c("FGP", "TPM", "TPA", "TPP", "FTP", "PM")
+colnames(new_data)
+new_data
+```
+```{r}
+write_csv(new_data, "R_data.csv")
+```
+
+
+Splitting data (will attempt k-fold validation)
+
+```{r}
+set.seed(666)
+
+test_index <- sample(1:1194, 1194, replace = FALSE)
+test_index1 <- test_index[1:199]
+test_index2 <- test_index[200:398]
+test_index3 <- test_index[399:597]
+test_index4 <- test_index[598:796]
+test_index5 <- test_index[767:995]
+test_index6 <- test_index[996:1194]
+  
+test_data1 <- as.data.frame(new_data[test_index1, -1])
+test_knowns1 <- new_data[test_index1, 1]
+train1 <- as.data.frame(new_data[-test_index1, ])
+train1$class <- as.factor(train1$class)
+
+test_data1 <- as.data.frame(new_data[test_index1, -1])
+test_knowns1 <- new_data[test_index1, 1]
+train1 <- as.data.frame(new_data[-test_index1, ])
+train1$class <- as.factor(train1$class)
+
+
+test_data2 <- as.data.frame(new_data[test_index2, -1])
+test_knowns2 <- new_data[test_index2, 1]
+train2 <- as.data.frame(new_data[-test_index2, ])
+train2$class <- as.factor(train2$class)
+
+
+test_data3 <- as.data.frame(new_data[test_index3, -1])
+test_knowns3 <- new_data[test_index3, 1]
+train3 <- as.data.frame(new_data[-test_index3, ])
+train3$class <- as.factor(train3$class)
+
+
+test_data4 <- as.data.frame(new_data[test_index4, -1])
+test_knowns4 <- new_data[test_index4, 1]
+train4 <- as.data.frame(new_data[-test_index4, ])
+train4$class <- as.factor(train4$class)
+
+test_data5 <- as.data.frame(new_data[test_index5, -1])
+test_knowns5 <- new_data[test_index5, 1]
+train5 <- as.data.frame(new_data[-test_index5, ])
+train5$class <- as.factor(train5$class)
+
+test_data6 <- as.data.frame(new_data[test_index6, -1])
+test_knowns6 <- new_data[test_index6, 1]
+train6 <- as.data.frame(new_data[-test_index6, ])
+train6$class <- as.factor(train6$class)
+
+
+
+
+```
+
+Trees:
+
+```{r}
+boost <- boosting(class ~ ., data=train1, mfinal = 100)
+predict.boosting(boost, as.data.frame(new_data[test_index1,]))$error
+
+boost <- boosting(class ~ ., data=train2, mfinal = 100)
+predict.boosting(boost, as.data.frame(new_data[test_index2,]))$error
+
+boost <- boosting(class ~ ., data=train3, mfinal = 100)
+predict.boosting(boost, as.data.frame(new_data[test_index3,]))$error
+
+boost <- boosting(class ~ ., data=train4, mfinal = 100)
+predict.boosting(boost, as.data.frame(new_data[test_index4,]))$error
+
+boost <- boosting(class ~ ., data=train5, mfinal = 100)
+predict.boosting(boost, as.data.frame(new_data[test_index5,]))$error
+
+boost <- boosting(class ~ ., data=train6, mfinal = 100)
+predict.boosting(boost, as.data.frame(new_data[test_index6,]))$error
+```
+
+KNN: 
+
+```{r}
+model = knn(train1[,-1], test_data1, train1[,1], k = 19, l = 0, prob = FALSE, use.all = TRUE)
+mean(as.factor(test_knowns1) != model)
+```
+
+Logistic Regression:
+
+```{r}
+error <- numeric(6)
+
+model <- glm(class~., family="binomial", data=train1)
+predicted <- predict(model, test_data1, type="response")
+predicted <- sign(predicted - 0.5)
+predicted <- (predicted + 1)/2
+error[1] = mean(abs(predicted - test_knowns1))
+
+model <- glm(class~., family="binomial", data=train2)
+predicted <- predict(model, test_data2, type="response")
+predicted <- sign(predicted - 0.5)
+predicted <- (predicted + 1)/2
+error[2] = mean(abs(predicted - test_knowns2))
+
+model <- glm(class~., family="binomial", data=train3)
+predicted <- predict(model, test_data3, type="response")
+predicted <- sign(predicted - 0.5)
+predicted <- (predicted + 1)/2
+error[3] = mean(abs(predicted - test_knowns3))
+
+model <- glm(class~., family="binomial", data=train4)
+predicted <- predict(model, test_data4, type="response")
+predicted <- sign(predicted - 0.5)
+predicted <- (predicted + 1)/2
+error[4] = mean(abs(predicted - test_knowns4))
+
+model <- glm(class~., family="binomial", data=train5)
+predicted <- predict(model, test_data5, type="response")
+predicted <- sign(predicted - 0.5)
+predicted <- (predicted + 1)/2
+error[5] = mean(abs(predicted - test_knowns5))
+
+model <- glm(class~., family="binomial", data=train6)
+predicted <- predict(model, test_data6, type="response")
+predicted <- sign(predicted - 0.5)
+predicted <- (predicted + 1)/2
+error[6] = mean(abs(predicted - test_knowns6))
+
+mean(error)
+```
+
+
+LDA:
+
+```{r}
+model = lda(class ~ ., data = train1)
+error[1] = mean(predict(model, test_data1)$class != test_knowns1)
+
+model = lda(class ~ ., data = train2)
+error[2] = mean(predict(model, test_data2)$class != test_knowns2)
+
+model = lda(class ~ ., data = train3)
+error[3] = mean(predict(model, test_data3)$class != test_knowns3)
+
+model = lda(class ~ ., data = train4)
+error[4] = mean(predict(model, test_data4)$class != test_knowns4)
+
+model = lda(class ~ ., data = train5)
+error[5] = mean(predict(model, test_data5)$class != test_knowns5)
+
+model = lda(class ~ ., data = train)
+error[6] = mean(predict(model, test_data6)$class != test_knowns6)
+
+mean(error)
+```
+
+
+SVM:
+
+```{r}
+model = svm(class ~ ., 
+                 data = train1, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+error[1] = mean(predict(model, test_data1) != test_knowns1)
+
+model = svm(class ~ ., 
+                 data = train2, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+error[2] = mean(predict(model, test_data2) != test_knowns2)
+
+model = svm(class ~ ., 
+                 data = train3, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+error[3] = mean(predict(model, test_data3) != test_knowns3)
+
+model = svm(class ~ ., 
+                 data = train4, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+error[4] = mean(predict(model, test_data4) != test_knowns4)
+
+model = svm(class ~ ., 
+                 data = train5, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+error[5] = mean(predict(model, test_data5) != test_knowns5)
+
+model = svm(class ~ ., 
+                 data = train6, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+error[6] = mean(predict(model, test_data6) != test_knowns6)
+
+mean(error)
+```
+
+
+
+PCA:
+
+```{r}
+results <- prcomp(new_data[,-1], scale = TRUE)
+results$sdev^2 / sum(results$sdev^2)
+```
+
+LASSO:
+
+```{r}
+X <- as.matrix(new_data[,-1])
+Y <- as.numeric(new_data[,1])
+
+cv_model <- cv.glmnet(X, Y, alpha = 1) 
+lambda <- cv_model$lambda.min
+lambda
+
+model <- glmnet(X, Y, alpha = 1, lambda = lambda) 
+coef(model)
+```
+
+```{r}
+var_select_data <- new_data[,-c(5,6,7,10:17,21,23,24,25)]
+
+set.seed(666)
+
+vtest_index <- sample(1:2424, 727, replace = FALSE)
+vtest_data <- as.data.frame(var_select_data[test_index, -1])
+vtest_knowns <- var_select_data[test_index, 1]
+vtrain <- as.data.frame(var_select_data[-test_index, ])
+vtrain$class <- as.factor(vtrain$class)
+
+```
+
+```{r}
+model = svm(class ~ ., 
+                 data = vtrain, 
+                 type = 'C-classification', 
+                 kernel = 'linear')
+mean(predict(model, vtest_data) != vtest_knowns)
+```
+
+
